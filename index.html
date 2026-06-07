@@ -1067,6 +1067,288 @@ function render(){
 }
 
 render();
+
+// ══════════════════════════════════════════════════════════════════════
+// AI COACH CHATBOT — zweefknop rechtsonder
+// ══════════════════════════════════════════════════════════════════════
+
+const botCSS=`
+.bot-btn{position:fixed;bottom:22px;right:22px;width:54px;height:54px;border-radius:50%;
+  background:var(--accent);border:none;cursor:pointer;display:flex;align-items:center;
+  justify-content:center;font-size:24px;box-shadow:0 4px 20px rgba(124,106,247,0.5);
+  z-index:1000;transition:transform .2s;-webkit-tap-highlight-color:transparent;}
+.bot-btn:active{transform:scale(0.93);}
+.bot-badge{position:absolute;top:-3px;right:-3px;width:16px;height:16px;border-radius:50%;
+  background:var(--red);border:2px solid var(--bg);font-size:9px;font-weight:700;
+  color:#fff;display:flex;align-items:center;justify-content:center;}
+.bot-panel{position:fixed;bottom:88px;right:16px;width:340px;max-width:calc(100vw - 32px);
+  height:480px;max-height:calc(100dvh - 110px);background:var(--bg2);border:1px solid var(--border2);
+  border-radius:18px;display:flex;flex-direction:column;z-index:999;
+  box-shadow:0 8px 40px rgba(0,0,0,0.6);overflow:hidden;
+  transform:scale(0.95) translateY(10px);opacity:0;pointer-events:none;
+  transition:transform .2s,opacity .2s;}
+.bot-panel.open{transform:scale(1) translateY(0);opacity:1;pointer-events:all;}
+.bot-header{padding:14px 16px;border-bottom:1px solid var(--border);display:flex;
+  align-items:center;gap:10px;flex-shrink:0;}
+.bot-avatar{width:34px;height:34px;border-radius:50%;background:linear-gradient(135deg,var(--accent),#a78bfa);
+  display:flex;align-items:center;justify-content:center;font-size:16px;flex-shrink:0;}
+.bot-title{font-family:Syne,sans-serif;font-size:14px;font-weight:800;}
+.bot-sub{font-size:11px;color:var(--green);}
+.bot-close{margin-left:auto;background:var(--bg3);border:1px solid var(--border);
+  color:var(--muted2);border-radius:7px;padding:5px 9px;cursor:pointer;font-size:13px;
+  -webkit-tap-highlight-color:transparent;}
+.bot-msgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:8px;
+  -webkit-overflow-scrolling:touch;}
+.bot-msg{max-width:88%;padding:10px 13px;border-radius:13px;font-size:13px;line-height:1.55;}
+.bot-msg.ai{background:var(--bg3);border:1px solid var(--border);border-bottom-left-radius:3px;align-self:flex-start;}
+.bot-msg.user{background:rgba(124,106,247,0.15);border:1px solid rgba(124,106,247,0.25);
+  border-bottom-right-radius:3px;align-self:flex-end;}
+.bot-msg.action{background:rgba(74,222,128,0.1);border:1px solid rgba(74,222,128,0.25);
+  border-radius:10px;align-self:flex-start;font-size:12px;color:var(--green);}
+.bot-typing{display:flex;gap:4px;align-items:center;padding:10px 13px;background:var(--bg3);
+  border:1px solid var(--border);border-radius:13px;border-bottom-left-radius:3px;
+  align-self:flex-start;width:52px;}
+.bot-footer{padding:10px 12px;border-top:1px solid var(--border);display:flex;gap:8px;flex-shrink:0;}
+.bot-inp{flex:1;background:var(--bg3);border:1px solid var(--border2);border-radius:10px;
+  padding:9px 12px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:13px;outline:none;
+  -webkit-appearance:none;}
+.bot-inp:focus{border-color:var(--accent);}
+.bot-send{background:var(--accent);border:none;border-radius:10px;padding:9px 13px;
+  color:#fff;font-size:14px;cursor:pointer;flex-shrink:0;-webkit-tap-highlight-color:transparent;}
+.bot-send:active{background:#8f7fff;}
+.bot-chips{display:flex;gap:6px;flex-wrap:wrap;padding:0 12px 10px;}
+.chip{background:var(--bg3);border:1px solid var(--border2);border-radius:20px;
+  padding:5px 11px;font-size:11px;color:var(--muted2);cursor:pointer;
+  -webkit-tap-highlight-color:transparent;white-space:nowrap;}
+.chip:active{border-color:var(--accent);color:var(--accent);}
+`;
+const styleBot=document.createElement("style");
+styleBot.textContent=botCSS;
+document.head.appendChild(styleBot);
+
+// Bot state
+const bot={
+  open:false,
+  msgs:[{role:"ai",text:"Hey Andreas! 👋 Ik ben je AI coach. Ik ken je volledige schema, je voortgang en je data.\n\nVraag me alles — over oefeningen, voeding, je planning — of zeg me wat ik moet aanpassen!"}],
+  loading:false,
+  unread:1,
+};
+
+// Build system prompt with full context
+function getBotContext(){
+  const week=getCurrentWeek();
+  const phase=getPhase(week);
+  const today=todayKey();
+  const latest=state.weightLog.length>0?state.weightLog[state.weightLog.length-1].kg:98;
+  const lost=Math.max(0,98-latest).toFixed(1);
+  const todayCals=(state.calorieLog[today]||[]).reduce((s,m)=>s+(m.kcal||0),0);
+  const todayProt=(state.calorieLog[today]||[]).reduce((s,m)=>s+(m.prot||0),0);
+  const recentWeights=state.weightLog.slice(-5).map(w=>w.date+": "+w.kg+"kg").join(", ")||"Nog geen metingen";
+  const customCals=load("customCals",2050);
+  const customProt=load("customProt",150);
+
+  return `Je bent de persoonlijke AI fitness coach van Andreas (20 jaar, 1m85, startte op 98kg, doel 88kg).
+Je spreekt ALTIJD Nederlands, bent motiverend, praktisch en direct.
+
+HUIDIG SCHEMA:
+- Week ${week} van 26
+- ${phase.name}: ${phase.desc}
+- Caloriedoel: ${customCals} kcal/dag
+- Eiwitdoel: ${customProt}g/dag
+- Weekpatroon: Ma=Kracht A, Di=Cardio, Wo=Rust, Do=Kracht B, Vr=Rust, Za=Cardio, Zo=Rust
+
+VANDAAG (${today}):
+- Calorieën gegeten: ${todayCals} kcal
+- Eiwitten: ${todayProt}g
+
+GEWICHT:
+- Huidig: ${latest}kg
+- Verloren: ${lost}kg
+- Recente metingen: ${recentWeights}
+
+JE KAN DE VOLGENDE DINGEN AANPASSEN door een JSON-actie terug te geven in je antwoord:
+Als je iets wil aanpassen, voeg aan het EINDE van je antwoord dit toe (op een nieuwe lijn):
+ACTION:{"type":"set_cals","value":2100} — om caloriedoel te wijzigen
+ACTION:{"type":"set_prot","value":160} — om eiwitdoel te wijzigen
+ACTION:{"type":"add_note","date":"${today}","text":"..."} — om een notitie toe te voegen
+ACTION:{"type":"add_weight","date":"${today}","kg":97.5} — om een gewicht toe te voegen
+
+Geef korte, directe antwoorden. Max 4-5 zinnen tenzij iets uitgebreide uitleg vraagt.
+Gebruik emoji spaarzaam maar passend. Wees een echte coach, niet een robot.`;
+}
+
+function parseBotAction(text){
+  const match=text.match(/ACTION:(\{[^\n]+\})/);
+  if(!match)return null;
+  try{return JSON.parse(match[1]);}catch{return null;}
+}
+
+function executeBotAction(action){
+  if(!action)return null;
+  if(action.type==="set_cals"){
+    save("customCals",action.value);
+    return "✅ Caloriedoel aangepast naar "+action.value+" kcal/dag";
+  }
+  if(action.type==="set_prot"){
+    save("customProt",action.value);
+    return "✅ Eiwitdoel aangepast naar "+action.value+"g/dag";
+  }
+  if(action.type==="add_note"){
+    const notes={...state.notes,[action.date]:action.text};
+    state.notes=notes;save("notes",notes);
+    return "✅ Notitie toegevoegd voor "+action.date;
+  }
+  if(action.type==="add_weight"){
+    const entry={date:action.date,kg:action.kg};
+    const upd=[...state.weightLog.filter(w=>w.date!==action.date),entry].sort((a,b)=>a.date.localeCompare(b.date));
+    state.weightLog=upd;save("weightLog",upd);
+    return "✅ Gewicht "+action.kg+"kg opgeslagen voor "+action.date;
+  }
+  return null;
+}
+
+function cleanBotText(text){
+  return text.replace(/ACTION:\{[^\n]+\}/g,"").trim();
+}
+
+// Render bot UI
+function renderBot(){
+  const existing=document.getElementById("bot-root");
+  if(existing)existing.remove();
+  const root=document.createElement("div");
+  root.id="bot-root";
+
+  // Floating button
+  const btn=document.createElement("button");
+  btn.className="bot-btn";
+  btn.innerHTML=bot.open?"✕":"🤖";
+  if(!bot.open&&bot.unread>0){
+    const badge=document.createElement("div");
+    badge.className="bot-badge";
+    badge.textContent=bot.unread>9?"9+":bot.unread;
+    btn.appendChild(badge);
+  }
+  btn.addEventListener("click",()=>{
+    bot.open=!bot.open;
+    if(bot.open)bot.unread=0;
+    renderBot();
+    if(bot.open)setTimeout(()=>{const m=document.getElementById("bot-msgs");if(m)m.scrollTop=m.scrollHeight;},50);
+  });
+  root.appendChild(btn);
+
+  // Panel
+  const panel=document.createElement("div");
+  panel.className="bot-panel"+(bot.open?" open":"");
+
+  // Header
+  const header=document.createElement("div");
+  header.className="bot-header";
+  header.innerHTML=`<div class="bot-avatar">🤖</div><div><div class="bot-title">AI Coach</div><div class="bot-sub">● Online</div></div>`;
+  const closeBtn=document.createElement("button");
+  closeBtn.className="bot-close";closeBtn.textContent="✕";
+  closeBtn.addEventListener("click",()=>{bot.open=false;renderBot();});
+  header.appendChild(closeBtn);panel.appendChild(header);
+
+  // Messages
+  const msgs=document.createElement("div");
+  msgs.className="bot-msgs";msgs.id="bot-msgs";
+  bot.msgs.forEach(m=>{
+    const el=document.createElement("div");
+    if(m.role==="action"){el.className="bot-msg action";el.textContent=m.text;}
+    else{el.className="bot-msg "+(m.role==="ai"?"ai":"user");el.style.whiteSpace="pre-wrap";el.textContent=m.text;}
+    msgs.appendChild(el);
+  });
+  if(bot.loading){
+    const typing=document.createElement("div");
+    typing.className="bot-typing";
+    for(let i=0;i<3;i++){const d=document.createElement("div");d.className="dot";typing.appendChild(d);}
+    msgs.appendChild(typing);
+  }
+  panel.appendChild(msgs);
+
+  // Quick chips
+  const chips=document.createElement("div");
+  chips.className="bot-chips";
+  const chipTexts=["Hoe gaat mijn voortgang?","Wat eet ik vandaag?","Motiveer me!","Verander mijn caloriedoel"];
+  chipTexts.forEach(t=>{
+    const chip=document.createElement("div");
+    chip.className="chip";chip.textContent=t;
+    chip.addEventListener("click",()=>sendBotMsg(t));
+    chips.appendChild(chip);
+  });
+  panel.appendChild(chips);
+
+  // Footer input
+  const footer=document.createElement("div");
+  footer.className="bot-footer";
+  const inp=document.createElement("input");
+  inp.className="bot-inp";inp.placeholder="Stel een vraag...";inp.id="bot-inp";
+  inp.addEventListener("keydown",e=>{if(e.key==="Enter")sendBotMsg(inp.value);});
+  const send=document.createElement("button");
+  send.className="bot-send";send.textContent="↑";
+  send.addEventListener("click",()=>sendBotMsg(inp.value));
+  footer.appendChild(inp);footer.appendChild(send);
+  panel.appendChild(footer);
+
+  root.appendChild(panel);
+  document.body.appendChild(root);
+
+  // Scroll to bottom
+  setTimeout(()=>{
+    const m=document.getElementById("bot-msgs");
+    if(m)m.scrollTop=m.scrollHeight;
+    if(bot.open){const i=document.getElementById("bot-inp");if(i)i.focus();}
+  },50);
+}
+
+async function sendBotMsg(text){
+  if(!text||!text.trim()||bot.loading)return;
+  const inp=document.getElementById("bot-inp");
+  if(inp)inp.value="";
+  bot.msgs.push({role:"user",text:text.trim()});
+  bot.loading=true;renderBot();
+
+  try{
+    // Build messages for API (last 10 msgs for context)
+    const history=bot.msgs.slice(-10).map(m=>({role:m.role==="ai"||m.role==="action"?"assistant":"user",content:m.text}));
+    // Make sure last is user
+    const apiMsgs=history.filter(m=>m.role==="user"||m.role==="assistant");
+
+    const r=await fetch("https://api.anthropic.com/v1/messages",{
+      method:"POST",
+      headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({
+        model:"claude-sonnet-4-20250514",
+        max_tokens:600,
+        system:getBotContext(),
+        messages:apiMsgs.length>0?apiMsgs:[{role:"user",content:text.trim()}]
+      })
+    });
+    const data=await r.json();
+    const reply=data.content?.map(b=>b.text||"").join("")||"Sorry, er ging iets mis.";
+
+    // Parse and execute action
+    const action=parseBotAction(reply);
+    const cleanReply=cleanBotText(reply);
+
+    bot.msgs.push({role:"ai",text:cleanReply});
+    if(action){
+      const result=executeBotAction(action);
+      if(result){
+        bot.msgs.push({role:"action",text:result});
+        render(); // refresh main app UI
+      }
+    }
+  }catch{
+    bot.msgs.push({role:"ai",text:"Oeps, er ging iets mis met de verbinding. Probeer opnieuw!"});
+  }
+  bot.loading=false;
+  bot.unread=bot.open?0:1;
+  renderBot();
+}
+
+// Init bot
+renderBot();
 </script>
 </body>
 </html>
