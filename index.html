@@ -1069,7 +1069,7 @@ function render(){
 render();
 
 // ══════════════════════════════════════════════════════════════════════
-// AI COACH CHATBOT — zweefknop rechtsonder
+// COACH CHATBOT — slim, offline, altijd beschikbaar
 // ══════════════════════════════════════════════════════════════════════
 
 const botCSS=`
@@ -1099,7 +1099,7 @@ const botCSS=`
   -webkit-tap-highlight-color:transparent;}
 .bot-msgs{flex:1;overflow-y:auto;padding:14px;display:flex;flex-direction:column;gap:8px;
   -webkit-overflow-scrolling:touch;}
-.bot-msg{max-width:88%;padding:10px 13px;border-radius:13px;font-size:13px;line-height:1.55;}
+.bot-msg{max-width:90%;padding:10px 13px;border-radius:13px;font-size:13px;line-height:1.55;white-space:pre-wrap;}
 .bot-msg.ai{background:var(--bg3);border:1px solid var(--border);border-bottom-left-radius:3px;align-self:flex-start;}
 .bot-msg.user{background:rgba(124,106,247,0.15);border:1px solid rgba(124,106,247,0.25);
   border-bottom-right-radius:3px;align-self:flex-end;}
@@ -1126,16 +1126,11 @@ const styleBot=document.createElement("style");
 styleBot.textContent=botCSS;
 document.head.appendChild(styleBot);
 
-// Bot state
-const bot={
-  open:false,
-  msgs:[{role:"ai",text:"Hey Andreas! 👋 Ik ben je AI coach. Ik ken je volledige schema, je voortgang en je data.\n\nVraag me alles — over oefeningen, voeding, je planning — of zeg me wat ik moet aanpassen!"}],
-  loading:false,
-  unread:1,
-};
+const bot={open:false,msgs:[{role:"ai",text:"Hey Andreas! 👋 Ik ben je persoonlijke coach.\n\nIk ken je volledig schema, je voortgang en je data. Stel me een vraag over je training, voeding of schema — of zeg me wat ik moet aanpassen!"}],loading:false,unread:1};
 
-// Build system prompt with full context
-function getBotContext(){
+// ── Smart offline coach logic ──────────────────────────────────────────
+function getBotReply(msg){
+  const m=msg.toLowerCase().trim();
   const week=getCurrentWeek();
   const phase=getPhase(week);
   const today=todayKey();
@@ -1143,211 +1138,205 @@ function getBotContext(){
   const lost=Math.max(0,98-latest).toFixed(1);
   const todayCals=(state.calorieLog[today]||[]).reduce((s,m)=>s+(m.kcal||0),0);
   const todayProt=(state.calorieLog[today]||[]).reduce((s,m)=>s+(m.prot||0),0);
-  const recentWeights=state.weightLog.slice(-5).map(w=>w.date+": "+w.kg+"kg").join(", ")||"Nog geen metingen";
   const customCals=load("customCals",2050);
   const customProt=load("customProt",150);
 
-  return `Je bent de persoonlijke AI fitness coach van Andreas (20 jaar, 1m85, startte op 98kg, doel 88kg).
-Je spreekt ALTIJD Nederlands, bent motiverend, praktisch en direct.
+  // ── Aanpassingen schema ──
+  const calMatch=m.match(/calorie[^\d]*(\d{3,4})/);
+  if(calMatch){
+    const val=parseInt(calMatch[1]);
+    if(val>=1200&&val<=3500){save("customCals",val);return{text:"✅ Caloriedoel aangepast naar "+val+" kcal/dag! Dit wordt direct doorgevoerd in je dashboard.",action:"refresh"};}
+    return{text:"Dat lijkt me geen realistisch caloriedoel. Kies iets tussen 1200 en 3500 kcal."};
+  }
+  const protMatch=m.match(/eiwit[^\d]*(\d{2,3})/);
+  if(protMatch){
+    const val=parseInt(protMatch[1]);
+    if(val>=80&&val<=300){save("customProt",val);return{text:"✅ Eiwitdoel aangepast naar "+val+"g/dag!",action:"refresh"};}
+    return{text:"Dat lijkt geen realistisch eiwitdoel. Kies iets tussen 80g en 300g."};
+  }
 
-HUIDIG SCHEMA:
-- Week ${week} van 26
-- ${phase.name}: ${phase.desc}
-- Caloriedoel: ${customCals} kcal/dag
-- Eiwitdoel: ${customProt}g/dag
-- Weekpatroon: Ma=Kracht A, Di=Cardio, Wo=Rust, Do=Kracht B, Vr=Rust, Za=Cardio, Zo=Rust
+  // Gewicht loggen via chat
+  const wMatch=m.match(/(\d{2,3}[.,]\d)\s*kg|weeg\s*(\d{2,3})/);
+  if(wMatch&&(m.includes("weeg")||m.includes("kg"))){
+    const kg=parseFloat((wMatch[1]||wMatch[2]).replace(",","."));
+    if(kg>50&&kg<250){
+      const entry={date:today,kg};
+      const upd=[...state.weightLog.filter(w=>w.date!==today),entry].sort((a,b)=>a.date.localeCompare(b.date));
+      state.weightLog=upd;save("weightLog",upd);
+      const diff=(kg-98).toFixed(1);
+      return{text:"✅ Gewicht "+kg+"kg opgeslagen voor vandaag!\n\nJe bent al "+Math.abs(diff)+"kg "+(parseFloat(diff)<0?"afgevallen 💪":"bijgekomen")+". Nog "+Math.max(0,kg-88).toFixed(1)+"kg te gaan naar je doel van 88kg.",action:"refresh"};
+    }
+  }
 
-VANDAAG (${today}):
-- Calorieën gegeten: ${todayCals} kcal
-- Eiwitten: ${todayProt}g
+  // ── Voortgang ──
+  if(m.includes("voortgang")||m.includes("hoe gaat")||m.includes("progressie")||m.includes("resultaat")){
+    const wksLeft=26-week;
+    let feedback="";
+    if(parseFloat(lost)===0)feedback="Je hebt nog geen gewichtsmetingen ingegeven — voeg ze toe via de Gewicht-pagina!";
+    else if(parseFloat(lost)<2)feedback="Je bent net gestart. Hou vol, de eerste resultaten komen eraan!";
+    else if(parseFloat(lost)<5)feedback="Goede start! Je bent al "+lost+"kg kwijt. Consistentie is nu het sleutelwoord.";
+    else feedback="Wauw, "+lost+"kg verloren! Dat is uitstekend. Je bent goed op weg!";
+    return{text:"📊 Jouw voortgang:\n\n• Gewicht: "+latest+"kg (was 98kg)\n• Verloren: "+lost+"kg\n• Nog te gaan: "+Math.max(0,latest-88).toFixed(1)+"kg\n• Fase: "+phase.name+"\n• Week "+week+" van 26 ("+wksLeft+" weken resterend)\n\n"+feedback};
+  }
 
-GEWICHT:
-- Huidig: ${latest}kg
-- Verloren: ${lost}kg
-- Recente metingen: ${recentWeights}
+  // ── Motivatie ──
+  if(m.includes("motiveer")||m.includes("motivatie")||m.includes("niet meer zin")||m.includes("opgeven")||m.includes("moeilijk")||m.includes("lastig")){
+    const msgs=["Je bent al "+lost+"kg kwijt. Dat gedaan-hebben is van jou — niemand kan dat wegnemen. Eén slechte dag maakt je niet dik, één goede dag maakt je niet slank. Gewoon morgen verdergaan. 💪","Kijk even terug naar waar je begon: 98kg, geen routine, geen plan. Nu heb je een 26-weken schema, je logt je voeding en workouts. Dat is al enorm. Hou vol! 🔥","Week "+week+" van 26. Meer dan de helft van de mensen zou al gestopt zijn. Jij niet. Dat zegt alles. 🏆","Het moeilijkste is niet de workout — het is de beslissing om te beginnen. Die beslissing heb jij al genomen. De rest is gewoon uitvoeren. 💪"];
+    return{text:msgs[Math.floor(Math.random()*msgs.length)]};
+  }
 
-JE KAN DE VOLGENDE DINGEN AANPASSEN door een JSON-actie terug te geven in je antwoord:
-Als je iets wil aanpassen, voeg aan het EINDE van je antwoord dit toe (op een nieuwe lijn):
-ACTION:{"type":"set_cals","value":2100} — om caloriedoel te wijzigen
-ACTION:{"type":"set_prot","value":160} — om eiwitdoel te wijzigen
-ACTION:{"type":"add_note","date":"${today}","text":"..."} — om een notitie toe te voegen
-ACTION:{"type":"add_weight","date":"${today}","kg":97.5} — om een gewicht toe te voegen
+  // ── Vandaag ──
+  if(m.includes("vandaag")||m.includes("wat moet ik")){
+    const sched=buildSchedule();const todayType=sched[today];
+    if(todayType){
+      const wo=getWorkout(week,todayType);
+      const calsLeft=customCals-todayCals;
+      return{text:"📅 Vandaag: "+wo.name+"\n\n"+wo.ex.slice(0,4).map(e=>"• "+e.name+" — "+e.sets+"×"+e.reps+" ("+e.weight+")").join("\n")+"\n\nVoeding: je hebt al "+todayCals+" kcal gegeten. Nog "+Math.max(0,calsLeft)+" kcal over voor vandaag.\n\nKlaar? Ga naar Workouts en vink je sets af! 💪"};
+    }else{
+      return{text:"☕ Vandaag is een rustdag!\n\nGebruik deze dag voor herstel:\n• Licht wandelen mag\n• Zorg voor voldoende eiwitten ("+customProt+"g)\n• Slaap minstens 7-8 uur\n• Drink 2-3 liter water\n\nJe spieren groeien en herstellen op rustdagen. Niets doen is ook trainen!"};
+    }
+  }
 
-Geef korte, directe antwoorden. Max 4-5 zinnen tenzij iets uitgebreide uitleg vraagt.
-Gebruik emoji spaarzaam maar passend. Wees een echte coach, niet een robot.`;
+  // ── Voeding vragen ──
+  if(m.includes("eten")||m.includes("voeding")||m.includes("maaltijd")||m.includes("calorie")||m.includes("eiwit")){
+    if(m.includes("hoeveel")||m.includes("doel")||m.includes("moet")){
+      return{text:"🍽️ Jouw voedingsdoelen:\n\n• Calorieën: "+customCals+" kcal/dag\n• Eiwitten: "+customProt+"g/dag\n\nVandaag al gegeten:\n• "+todayCals+" kcal ("+Math.max(0,customCals-todayCals)+" over)\n• "+todayProt+"g eiwit ("+Math.max(0,customProt-todayProt)+"g nog nodig)\n\nTip: gebruik de Voeding-pagina om maaltijden in te geven — ik bereken dan automatisch calorieën en eiwitten!"};
+    }
+    if(m.includes("ontbijt")){return{text:"🍳 Goed ontbijt voor jou:\n\n• 4 scrambled eggs + 2 sneden volkorenbrood (~550 kcal, 45g eiwit)\n• Of: 200g Griekse yoghurt + 1 banaan + handje noten (~400 kcal, 25g eiwit)\n• Of: havermout met melk + eiwitpoeder (~450 kcal, 35g eiwit)\n\nDoel: minstens 30g eiwit bij je ontbijt!"};
+    }
+    if(m.includes("lunch")){return{text:"🥗 Goede lunch opties:\n\n• 200g kipfilet + rijst + groenten (~550 kcal, 50g eiwit)\n• Tonijnsalade met volkoren brood (~450 kcal, 40g eiwit)\n• Omelet (4 eieren) met groenten + brood (~500 kcal, 38g eiwit)\n\nBereid je lunch de avond voor — zo maak je nooit slechte keuzes!"};
+    }
+    if(m.includes("avond")||m.includes("diner")){return{text:"🍗 Goede avondmaaltijden:\n\n• 200g zalm + zoete aardappel + broccoli (~600 kcal, 45g eiwit)\n• 200g mager gehakt + pasta + tomatensaus (~600 kcal, 42g eiwit)\n• 200g kip + 200g gemengde groenten + rijst (~550 kcal, 48g eiwit)\n\nEet je avondmaal minstens 2 uur voor je gaat slapen."};
+    }
+    return{text:"🍽️ Voedingstips voor jouw fase ("+phase.name+"):\n\n"+(FOOD_TIPS[week<=4?1:week<=8?2:week<=13?3:week<=18?4:week<=22?5:6].map(t=>t.i+" "+t.t).join("\n"))+"\n\nJe huidige doel: "+customCals+" kcal en "+customProt+"g eiwit per dag. Gebruik de Voeding-pagina om bij te houden wat je eet!"};
+  }
+
+  // ── Workout vragen ──
+  if(m.includes("workout")||m.includes("training")||m.includes("oefening")||m.includes("kracht")||m.includes("spier")){
+    if(m.includes("vandaag")||m.includes("nu")){
+      const sched=buildSchedule();const type=sched[today];
+      if(!type)return{text:"Vandaag is een rustdag! Geen training gepland. Morgen of overmorgen staat er wel een workout op het schema."};
+      const wo=getWorkout(week,type);
+      return{text:"💪 Workout van vandaag:\n\n"+wo.name+"\n\n"+wo.ex.map(e=>"• "+e.name+": "+e.sets+" sets × "+e.reps+" | "+e.weight).join("\n")+"\n\nGa naar de Workouts-pagina om je sets bij te houden!"};
+    }
+    if(m.includes("schema")||m.includes("week")){
+      return{text:"📅 Jouw weekschema:\n\n• Maandag: Kracht A (borst & schouders)\n• Dinsdag: Cardio/looptraining\n• Woensdag: Rust 🛌\n• Donderdag: Kracht B (rug & benen)\n• Vrijdag: Rust 🛌\n• Zaterdag: Cardio/looptraining\n• Zondag: Rust 🛌\n\nJe zit nu in "+phase.name+". De oefeningen worden zwaarder naarmate je vordert!"};
+    }
+    if(m.includes("fase")||m.includes("progressie")||m.includes("zwaarder")){
+      return{text:"📈 De 6 fases van jouw programma:\n\n1. Fundament (wk 1-4): techniek leren, lichte gewichten\n2. Opbouw (wk 5-8): meer volume, zwaarder\n3. Kracht (wk 9-13): intensiteit omhoog\n4. Intensiteit (wk 14-18): supersets\n5. Peak (wk 19-22): zwaarste training\n6. Recomposition (wk 23-26): definitie\n\nJij zit nu in: "+phase.name+" (week "+week+")"};
+    }
+    return{text:"💪 Trainingstips voor nu:\n\n• Je zit in "+phase.name+"\n• "+phase.desc+"\n• Verhoog gewichten zodra 12 reps makkelijk worden\n• Warm altijd 5 min op voor je begint\n• Log je sets in de Workouts-pagina voor progressie\n\nHeb je een specifieke vraag over een oefening?"};
+  }
+
+  // ── Oefening techniek ──
+  if(m.includes("squat")){return{text:"🦵 Squat techniek:\n\n• Voeten iets breder dan heupbreed, tenen licht naar buiten\n• Zak neer alsof je op een stoel gaat zitten\n• Knieën volgen de richting van je tenen\n• Rug recht houden!\n• Streefdoel: bovenbeen parallel aan de grond\n\n💡 Tip: begin met goblet squat (dumbbell voor borst) — dat helpt je automatisch recht te blijven."};
+  }
+  if(m.includes("deadlift")||m.includes("rdl")){return{text:"⬇️ Romanian Deadlift techniek:\n\n• Sta rechtop, dumbbells voor dijen\n• Buig voorover met RECHTE RUG — heupen gaan achteruit\n• Laat dumbbells langzaam zakken langs je benen\n• Voel de stretch in je hamstrings\n• Duw heupen vooruit om terug omhoog te komen\n\n⚠️ Meest gemaakte fout: rug ronden. Stop liever te vroeg dan je rug te belasten."};
+  }
+  if(m.includes("push")||m.includes("pushup")||m.includes("push-up")){return{text:"💪 Push-up techniek:\n\n• Handen iets breder dan schouderbreed\n• Lichaam in één rechte lijn van hoofd tot voeten\n• Buig ellebogen tot borst bijna de grond raakt\n• Core gespannen houden!\n• Duw explosief terug omhoog\n\n💡 Te moeilijk? Begin op je knieën. Te makkelijk? Voeten op een stoel."};
+  }
+  if(m.includes("row")||m.includes("rug")){return{text:"🏋️ Bent-over Row techniek:\n\n• Gebogen voorover (~45°), rug recht\n• Trek dumbbells naar je heup — ellebogen langs het lichaam\n• Knijp je schouderbladen samen bovenaan\n• Gecontroleerd terug laten zakken\n\n⚠️ Gebruik je rug niet als slinger — de kracht komt uit je rugspieren, niet uit je momentum."};
+  }
+
+  // ── Slaap & herstel ──
+  if(m.includes("slaap")||m.includes("herstel")||m.includes("rust")||m.includes("pijn")){
+    if(m.includes("pijn")||m.includes("spierpijn")){return{text:"🤕 Over spierpijn:\n\n• Spierpijn 24-48u na training = normaal (DOMS)\n• Dit betekent dat je spieren groeien!\n• Licht bewegen (wandelen) helpt bij herstel\n• Scherpe pijn tijdens training = STOP, iets is niet goed\n\nWat voor pijn heb je precies? Geef me meer details als je bezorgd bent."};
+    }
+    return{text:"😴 Slaap & herstel tips:\n\n• Slaap minstens 7-8 uur per nacht\n• Je spieren groeien TIJDENS slaap, niet tijdens training\n• Rustdagen zijn verplicht — skip ze niet\n• Drink 2-3L water per dag\n• Eet genoeg eiwitten voor spierherstel\n\nSlaap is misschien wel de meest onderschatte factor in afvallen en spierkracht."};
+  }
+
+  // ── Gewicht & plateau ──
+  if(m.includes("plateau")||m.includes("niet meer")||m.includes("stagneert")){return{text:"📊 Gewichtsplateau — wat doen:\n\n1. Controleer je calorieën opnieuw — na gewichtsverlies daalt je verbruik\n2. Verhoog je cardio met 1 sessie per week\n3. Verminder koolhydraten licht op rustdagen\n4. Check je eiwitinname — minstens "+customProt+"g/dag\n5. Zorg voor goede slaap\n\nEen plateau is normaal na 4-6 weken. Jouw lichaam past zich aan. Kleine aanpassingen zijn genoeg — geen drastische maatregelen!"};
+  }
+
+  // ── Gewicht veranderen ──
+  if(m.includes("gewicht")||m.includes("weeg")||m.includes("afgevallen")||m.includes("kilo")){
+    return{text:"⚖️ Gewichtsinfo:\n\n• Startgewicht: 98kg\n• Huidig: "+latest+"kg\n• Verloren: "+lost+"kg\n• Doel: 88kg (nog "+Math.max(0,latest-88).toFixed(1)+"kg te gaan)\n\nOm je gewicht bij te houden: ga naar de Gewicht-pagina en voeg een meting toe.\nOf typ gewoon '95.5kg' hier en ik sla het op voor je!"};
+  }
+
+  // ── Fase info ──
+  if(m.includes("fase")||m.includes("schema")||m.includes("programma")){
+    return{text:"📅 Je huidige fase:\n\n"+phase.name+" (week "+week+" van 26)\n"+phase.desc+"\n\nNog "+(26-week)+" weken te gaan in het programma. Elke 4-6 weken veranderen de oefeningen en verhoogt de intensiteit automatisch."};
+  }
+
+  // ── Aanmoediging algemeen ──
+  if(m.includes("goed")||m.includes("super")||m.includes("bedankt")||m.includes("dankjewel")){
+    return{text:"Graag gedaan! Blijf zo doorgaan — je bent op de goede weg. 💪\n\nIs er nog iets waar ik je mee kan helpen?"};
+  }
+
+  // ── Fallback ──
+  return{text:"Goede vraag! Ik kan je helpen met:\n\n💪 Training — schema, oefeningen, techniek\n🍽️ Voeding — maaltijden, calorieën, eiwitten\n📊 Voortgang — gewicht, statistieken\n⚙️ Aanpassingen — caloriedoel, eiwitdoel wijzigen\n\nStel je vraag opnieuw met meer detail, of kies een van de snelknoppen hieronder!"};
 }
 
-function parseBotAction(text){
-  const match=text.match(/ACTION:(\{[^\n]+\})/);
-  if(!match)return null;
-  try{return JSON.parse(match[1]);}catch{return null;}
-}
-
-function executeBotAction(action){
-  if(!action)return null;
-  if(action.type==="set_cals"){
-    save("customCals",action.value);
-    return "✅ Caloriedoel aangepast naar "+action.value+" kcal/dag";
-  }
-  if(action.type==="set_prot"){
-    save("customProt",action.value);
-    return "✅ Eiwitdoel aangepast naar "+action.value+"g/dag";
-  }
-  if(action.type==="add_note"){
-    const notes={...state.notes,[action.date]:action.text};
-    state.notes=notes;save("notes",notes);
-    return "✅ Notitie toegevoegd voor "+action.date;
-  }
-  if(action.type==="add_weight"){
-    const entry={date:action.date,kg:action.kg};
-    const upd=[...state.weightLog.filter(w=>w.date!==action.date),entry].sort((a,b)=>a.date.localeCompare(b.date));
-    state.weightLog=upd;save("weightLog",upd);
-    return "✅ Gewicht "+action.kg+"kg opgeslagen voor "+action.date;
-  }
-  return null;
-}
-
-function cleanBotText(text){
-  return text.replace(/ACTION:\{[^\n]+\}/g,"").trim();
-}
-
-// Render bot UI
 function renderBot(){
   const existing=document.getElementById("bot-root");
   if(existing)existing.remove();
-  const root=document.createElement("div");
-  root.id="bot-root";
+  const root=document.createElement("div");root.id="bot-root";
 
-  // Floating button
   const btn=document.createElement("button");
-  btn.className="bot-btn";
-  btn.innerHTML=bot.open?"✕":"🤖";
+  btn.className="bot-btn";btn.innerHTML=bot.open?"✕":"🤖";
   if(!bot.open&&bot.unread>0){
-    const badge=document.createElement("div");
-    badge.className="bot-badge";
-    badge.textContent=bot.unread>9?"9+":bot.unread;
-    btn.appendChild(badge);
+    const badge=document.createElement("div");badge.className="bot-badge";
+    badge.textContent=bot.unread>9?"9+":bot.unread;btn.appendChild(badge);
   }
-  btn.addEventListener("click",()=>{
-    bot.open=!bot.open;
-    if(bot.open)bot.unread=0;
-    renderBot();
-    if(bot.open)setTimeout(()=>{const m=document.getElementById("bot-msgs");if(m)m.scrollTop=m.scrollHeight;},50);
-  });
+  btn.addEventListener("click",()=>{bot.open=!bot.open;if(bot.open)bot.unread=0;renderBot();setTimeout(()=>{const m=document.getElementById("bot-msgs");if(m)m.scrollTop=m.scrollHeight;},50);});
   root.appendChild(btn);
 
-  // Panel
   const panel=document.createElement("div");
   panel.className="bot-panel"+(bot.open?" open":"");
 
-  // Header
-  const header=document.createElement("div");
-  header.className="bot-header";
-  header.innerHTML=`<div class="bot-avatar">🤖</div><div><div class="bot-title">AI Coach</div><div class="bot-sub">● Online</div></div>`;
-  const closeBtn=document.createElement("button");
-  closeBtn.className="bot-close";closeBtn.textContent="✕";
+  const header=document.createElement("div");header.className="bot-header";
+  header.innerHTML=`<div class="bot-avatar">🤖</div><div><div class="bot-title">FIT PRO Coach</div><div class="bot-sub">● Altijd beschikbaar</div></div>`;
+  const closeBtn=document.createElement("button");closeBtn.className="bot-close";closeBtn.textContent="✕";
   closeBtn.addEventListener("click",()=>{bot.open=false;renderBot();});
   header.appendChild(closeBtn);panel.appendChild(header);
 
-  // Messages
-  const msgs=document.createElement("div");
-  msgs.className="bot-msgs";msgs.id="bot-msgs";
+  const msgs=document.createElement("div");msgs.className="bot-msgs";msgs.id="bot-msgs";
   bot.msgs.forEach(m=>{
     const el=document.createElement("div");
-    if(m.role==="action"){el.className="bot-msg action";el.textContent=m.text;}
-    else{el.className="bot-msg "+(m.role==="ai"?"ai":"user");el.style.whiteSpace="pre-wrap";el.textContent=m.text;}
-    msgs.appendChild(el);
+    el.className="bot-msg "+(m.role==="action"?"action":m.role==="ai"?"ai":"user");
+    el.textContent=m.text;msgs.appendChild(el);
   });
   if(bot.loading){
-    const typing=document.createElement("div");
-    typing.className="bot-typing";
+    const typing=document.createElement("div");typing.className="bot-typing";
     for(let i=0;i<3;i++){const d=document.createElement("div");d.className="dot";typing.appendChild(d);}
     msgs.appendChild(typing);
   }
   panel.appendChild(msgs);
 
-  // Quick chips
-  const chips=document.createElement("div");
-  chips.className="bot-chips";
-  const chipTexts=["Hoe gaat mijn voortgang?","Wat eet ik vandaag?","Motiveer me!","Verander mijn caloriedoel"];
-  chipTexts.forEach(t=>{
-    const chip=document.createElement("div");
-    chip.className="chip";chip.textContent=t;
-    chip.addEventListener("click",()=>sendBotMsg(t));
-    chips.appendChild(chip);
+  const chips=document.createElement("div");chips.className="bot-chips";
+  [["Hoe gaat mijn voortgang?"],["Wat eet ik vandaag?"],["Motiveer me! 🔥"],["Workout van vandaag?"]].forEach(([t])=>{
+    const chip=document.createElement("div");chip.className="chip";chip.textContent=t;
+    chip.addEventListener("click",()=>sendBotMsg(t));chips.appendChild(chip);
   });
   panel.appendChild(chips);
 
-  // Footer input
-  const footer=document.createElement("div");
-  footer.className="bot-footer";
+  const footer=document.createElement("div");footer.className="bot-footer";
   const inp=document.createElement("input");
   inp.className="bot-inp";inp.placeholder="Stel een vraag...";inp.id="bot-inp";
-  inp.addEventListener("keydown",e=>{if(e.key==="Enter")sendBotMsg(inp.value);});
-  const send=document.createElement("button");
-  send.className="bot-send";send.textContent="↑";
+  inp.addEventListener("keydown",e=>{if(e.key==="Enter"&&!bot.loading)sendBotMsg(inp.value);});
+  const send=document.createElement("button");send.className="bot-send";send.textContent="↑";
   send.addEventListener("click",()=>sendBotMsg(inp.value));
-  footer.appendChild(inp);footer.appendChild(send);
-  panel.appendChild(footer);
-
+  footer.appendChild(inp);footer.appendChild(send);panel.appendChild(footer);
   root.appendChild(panel);
   document.body.appendChild(root);
-
-  // Scroll to bottom
-  setTimeout(()=>{
-    const m=document.getElementById("bot-msgs");
-    if(m)m.scrollTop=m.scrollHeight;
-    if(bot.open){const i=document.getElementById("bot-inp");if(i)i.focus();}
-  },50);
+  setTimeout(()=>{const m=document.getElementById("bot-msgs");if(m)m.scrollTop=m.scrollHeight;if(bot.open){const i=document.getElementById("bot-inp");if(i)i.focus();}},50);
 }
 
-async function sendBotMsg(text){
+function sendBotMsg(text){
   if(!text||!text.trim()||bot.loading)return;
-  const inp=document.getElementById("bot-inp");
-  if(inp)inp.value="";
+  const inp=document.getElementById("bot-inp");if(inp)inp.value="";
   bot.msgs.push({role:"user",text:text.trim()});
   bot.loading=true;renderBot();
-
-  try{
-    // Build messages for API (last 10 msgs for context)
-    const history=bot.msgs.slice(-10).map(m=>({role:m.role==="ai"||m.role==="action"?"assistant":"user",content:m.text}));
-    // Make sure last is user
-    const apiMsgs=history.filter(m=>m.role==="user"||m.role==="assistant");
-
-    const r=await fetch("https://api.anthropic.com/v1/messages",{
-      method:"POST",
-      headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({
-        model:"claude-sonnet-4-20250514",
-        max_tokens:600,
-        system:getBotContext(),
-        messages:apiMsgs.length>0?apiMsgs:[{role:"user",content:text.trim()}]
-      })
-    });
-    const data=await r.json();
-    const reply=data.content?.map(b=>b.text||"").join("")||"Sorry, er ging iets mis.";
-
-    // Parse and execute action
-    const action=parseBotAction(reply);
-    const cleanReply=cleanBotText(reply);
-
-    bot.msgs.push({role:"ai",text:cleanReply});
-    if(action){
-      const result=executeBotAction(action);
-      if(result){
-        bot.msgs.push({role:"action",text:result});
-        render(); // refresh main app UI
-      }
-    }
-  }catch{
-    bot.msgs.push({role:"ai",text:"Oeps, er ging iets mis met de verbinding. Probeer opnieuw!"});
-  }
-  bot.loading=false;
-  bot.unread=bot.open?0:1;
-  renderBot();
+  setTimeout(()=>{
+    const result=getBotReply(text.trim());
+    bot.msgs.push({role:"ai",text:result.text});
+    if(result.action==="refresh")render();
+    bot.loading=false;bot.unread=bot.open?0:1;
+    renderBot();
+  },600);
 }
 
-// Init bot
 renderBot();
 </script>
 </body>
